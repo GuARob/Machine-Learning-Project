@@ -1,0 +1,132 @@
+---
+title: "Practical Machine Learning Project"
+author: "Guarob"
+date: "17/9/2020"
+output:
+  html_document: default
+---
+
+## Summary
+This project aims to build a predictive model to assign a performance category (A, B, C, D, E) to observations of personal activity. The data comes from Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013 at http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. This report describes how the predictive model was built, how cross validation was used, what our expectation of out-of-sample error was, and why we made the choices we did. Additionally, predictions on a test dataset were estimated.
+
+## Data
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. For this dataset, data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants was collected. The participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The data was splitted into a training set and a test set.
+
+## Getting the data
+The data was downloaded to a local folder with the following code:
+
+```{r, warning = FALSE, message=FALSE}
+library(caret)
+urltrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urltest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+destfiletrain <- "C:/RFoldr/Part8/Machine-Learning-Project/training.csv"
+destfiletest <- "C:/RFoldr/Part8/Machine-Learning-Project/testing.csv"
+download.file(urltrain, destfiletrain)
+download.file(urltest, destfiletest)
+
+training <- read.csv("training.csv")
+testing <- read.csv("testing.csv")
+```
+
+## Data processing
+The first step consisted of analyzing and adjusting the structure of the data, cleaning the dataset and selecting variables with a small number of missing values and that could provide information to the predictive model. We decided to convert character variables to numeric variables, and to keep -as part of this initial stage- variables with up to 10% of missing values. 
+After removing variables with a significant portion of missing values, we ended up with a dataset containing 60 variables, including the response variable now coded as a factor variable. We decided to eliminate character variables or variables that do not add predictive power.
+```{r, warning = FALSE, message=FALSE}
+for (i in 8:159){
+  if (class(training[,i])=="character"){
+    training[,i] <- as.numeric(training[,i])
+  }
+}
+for (i in 8:159){
+  if (class(testing[,i])=="character"){
+    testing[,i] <- as.numeric(testing[,i])
+  }
+}
+misvalpct <- matrix(nrow=length(names(training)),ncol=2)
+for (i in 1:length(names(training))){
+  misvalpct[i,1] <- i
+  misvalpct[i,2] <- sum(is.na(training[,i]))/length(training$classe)
+}
+misvals <- data.frame(misvalpct)
+colnames(misvals)<-c("colnum","misspct")
+elimcols <- misvals[misvals$misspct > 0.10,1]
+training <- training[,-elimcols]
+testing <- testing[,-elimcols]
+misvalpct <- NULL
+rm(misvals)
+rm(elimcols)
+
+training$classe <- factor(training$classe)
+
+misvals <- c()
+for (i in 1:length(names(training))){
+  if (is.character(training[,i])){
+    misvals <- rbind(misvals,i)
+  }
+}
+trainingnum <- training[,-misvals]
+testingnum <- testing[,-misvals]
+rm(misvals)
+trainingnum <- trainingnum[,-c(1:4)]
+testingnum <- testingnum[,-c(1:4)]
+```
+
+## Model building
+The first issue to notice is that the dependent variable in this dataset is categorical with five different levels (A, B, C, D, E). In spite of A meaning the only correct way to perform the activity, the rest of the levels are not aggregated into a single group as they provide information about what is being done wrong. This type of response variable limits the type of model to build, discarding linear models and non-linear models such as a logistic regression. We will use methods based on decision trees to build our predictive model, as they can handle categorical variables.
+
+### Partitioning the training dataset
+In order to conduct cross validation, we dedided to split the training dataset into a training set (70% of observations) and a validation set (30%). The training set will be used to estimate the predictive model and the validation set will be used to estimate out-of-sample error rates.
+```{r, warning = FALSE, message=FALSE}
+set.seed(12345)
+inTrain <- createDataPartition(trainingnum$classe, p = 0.70, list = FALSE)
+validationset <- trainingnum[-inTrain, ]
+trainingset <- trainingnum[inTrain, ]
+rm(inTrain)
+```
+
+### Variable Selection
+We decided to reduce the dimension of the dataset by conducting a principal components analysis and keeping only those components that contribute, jointly, with more than 80% of the variance.
+
+```{r, warning = FALSE, message=FALSE}
+trainingset.pca <- prcomp(trainingset[,-c(53)], center=TRUE, scale=TRUE)
+summary(trainingset.pca)
+trainset.scores <- predict(trainingset.pca,newdata=trainingset[,-c(53)])
+trainset.scores <- as.data.frame(trainset.scores[,1:12])
+trainset.scores$classe <- trainingset$classe
+
+valset.scores <- predict(trainingset.pca,newdata=validationset[,-c(53)])
+valset.scores <- as.data.frame(valset.scores[,1:12])
+valset.scores$classe <- validationset$classe
+
+```
+
+### Model Fitting
+The random forest model uses k-mode cross validation and is run 3 times on 10-fold data starting with 70% of the data for training and 30% for validating the model.
+
+Below the accuracy will test the prediction accuracy derived from the training data against the validation data
+
+```{r, warning = FALSE, message=FALSE}
+set.seed(12345)
+nuFoldData <- 10
+nuRepeats <- 3
+train_control <- trainControl(method = "repeatedcv", number = nuFoldData, repeats = nuRepeats)
+trainedModel <- train(classe ~ ., data = trainset.scores,
+                      method = "rf", ntree = nuFoldData, trControl = train_control)
+
+print(trainedModel$finalModel)
+trainedModel
+confusionMatrix(trainedModel, newdata = predict(trainedModel, 
+                                                newdata = valset.scores))
+```
+
+With these results we expect to obtain an out-of-sample error rate of 8%.
+
+# Prediction on test dataset
+```{r, warning = FALSE, message=FALSE}
+testset.scores <- predict(trainingset.pca,newdata=testingnum[,-c(53)])
+testset.scores <- as.data.frame(testset.scores[,1:12])
+testset.scores$predicted <- predict(trainedModel, newdata = testset.scores)
+testset.scores$predicted
+```
+
+
